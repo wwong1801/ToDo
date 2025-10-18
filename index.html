@@ -51,7 +51,7 @@
 
     <!-- Create/Edit -->
     <section class="card controls">
-      <div class="grid">
+      <form class="grid" id="taskForm">
         <div class="span-2">
           <label for="title">Task</label>
           <input id="title" type="text" placeholder="e.g. Buy milk #groceries" />
@@ -74,10 +74,10 @@
           <input id="tags" type="text" placeholder="work, urgent" />
         </div>
         <div style="display:flex;gap:8px;align-items:end">
-          <button id="addBtn" class="btn btn-add">Add</button>
-          <button id="resetBtn" class="btn btn-warn" title="Reset form">Reset</button>
+          <button id="addBtn" class="btn btn-add" type="submit">Add</button>
+          <button id="resetBtn" class="btn btn-warn" type="button" title="Reset form">Reset</button>
         </div>
-      </div>
+      </form>
     </section>
 
     <!-- Tabs -->
@@ -110,6 +110,7 @@
       due: document.getElementById('due'),
       priority: document.getElementById('priority'),
       tags: document.getElementById('tags'),
+      form: document.getElementById('taskForm'),
       addBtn: document.getElementById('addBtn'),
       resetBtn: document.getElementById('resetBtn'),
       list: document.getElementById('list'),
@@ -118,6 +119,7 @@
     };
 
     let currentFilter = 'all';
+    let editingId = null;
 
     // ===== Helpers =====
     function parseTags(s){
@@ -156,20 +158,29 @@
     }
 
     // ===== CRUD =====
-    function addTask(){
+    function handleSubmit(e){
+      if(e) e.preventDefault();
       const title = el.title.value.trim();
       if(!title){ el.title.focus(); return; }
-      const t = {
-        id: uid(),
-        title,
-        due: el.due.value || undefined,
-        priority: el.priority.value,
-        tags: parseTags(el.tags.value),
-        completed: false,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      tasks.push(t); save(); render(); clearForm();
+      const due = el.due.value ? el.due.value : undefined;
+      const priority = el.priority.value;
+      const tags = parseTags(el.tags.value);
+      if(editingId){
+        updateTask(editingId, { title, due, priority, tags });
+        clearForm();
+      }else{
+        const t = {
+          id: uid(),
+          title,
+          due,
+          priority,
+          tags,
+          completed: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        tasks.push(t); save(); render(); clearForm();
+      }
     }
 
     function updateTask(id, patch){
@@ -179,7 +190,29 @@
 
     function deleteTask(id){ tasks = tasks.filter(t=>t.id!==id); save(); render(); }
 
-    function clearForm(){ el.title.value=''; el.due.value=''; el.priority.value='none'; el.tags.value=''; }
+    function clearForm(){
+      el.form.reset();
+      el.priority.value='none';
+      editingId = null;
+      el.addBtn.textContent = 'Add';
+      el.resetBtn.textContent = 'Reset';
+      el.resetBtn.title = 'Reset form';
+      el.addBtn.classList.add('btn-add');
+    }
+
+    function beginEdit(id){
+      const t = tasks.find(x=>x.id===id); if(!t) return;
+      editingId = id;
+      el.title.value = t.title;
+      el.due.value = t.due || '';
+      el.priority.value = t.priority;
+      el.tags.value = t.tags.join(', ');
+      el.addBtn.textContent = 'Save';
+      el.resetBtn.textContent = 'Cancel';
+      el.resetBtn.title = 'Cancel editing';
+      el.addBtn.classList.remove('btn-add');
+      el.title.focus();
+    }
 
     // ===== Render =====
     function filtered(){
@@ -198,7 +231,7 @@
       if(data.length===0){ el.list.innerHTML = `<div class="empty">No tasks here. Add one above ✨</div>`; return; }
       el.list.innerHTML = data.map(t=>{
         const pills = [ t.priority!=='none' ? `<span class="pill">${t.priority}</span>` : '', t.due?`<span class="pill">${fmtDate(t.due)}</span>`:'' ].join('');
-        const tags = t.tags?.length? `<div class="tags">${t.tags.map(x=>`<span class="pill">#${x}</span>`).join('')}</div>`:'';
+        const tags = t.tags?.length? `<div class="tags">${t.tags.map(x=>`<span class="pill">#${escapeHtml(x)}</span>`).join('')}</div>`:'';
         return `
           <div class="task ${t.completed?'completed':''}" data-id="${t.id}">
             <input type="checkbox" ${t.completed?'checked':''} aria-label="complete">
@@ -214,12 +247,13 @@
       }).join('');
     }
 
-    function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+    function escapeHtml(s){
+      return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]) || c);
+    }
 
     // ===== Events =====
-    el.addBtn.addEventListener('click', addTask);
+    el.form.addEventListener('submit', handleSubmit);
     el.resetBtn.addEventListener('click', clearForm);
-    el.title.addEventListener('keydown', e=>{ if(e.key==='Enter') addTask(); });
 
     el.tabs.addEventListener('click', (e)=>{
       const btn = e.target.closest('[data-filter]'); if(!btn) return;
@@ -234,18 +268,9 @@
       if(e.target.matches('input[type="checkbox"]')){ updateTask(id,{completed:e.target.checked}); return; }
       const actionBtn = e.target.closest('button'); if(!actionBtn) return;
       const action = actionBtn.dataset.action;
-      if(action==='delete') deleteTask(id);
-      if(action==='edit') openEdit(id);
+      if(action==='delete'){ deleteTask(id); if(editingId===id) clearForm(); }
+      if(action==='edit') beginEdit(id);
     });
-
-    function openEdit(id){
-      const t = tasks.find(x=>x.id===id); if(!t) return;
-      const title = prompt('Edit title', t.title); if(title===null) return;
-      const due = prompt('Edit due (YYYY-MM-DD or empty)', t.due||''); if(due===null) return;
-      const priority = prompt('Priority none|low|medium|high', t.priority); if(priority===null) return;
-      const tags = prompt('Tags comma‑separated', t.tags.join(',')); if(tags===null) return;
-      updateTask(id,{ title: title.trim()||t.title, due: (due||'').trim()||undefined, priority: (priority||'none'), tags: parseTags(tags) });
-    }
 
     // ===== Init =====
     load(); render();
